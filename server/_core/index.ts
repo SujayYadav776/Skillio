@@ -1,12 +1,8 @@
 import "dotenv/config";
-import express from "express";
 import { createServer } from "http";
 import net from "net";
-import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { registerWebhookRoutes } from "../messaging/webhook";
+import { createBaseApp, errorHandler } from "./app";
 import { startScheduler } from "../scheduler";
-import { appRouter } from "../routers";
-import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 
 function isPortAvailable(port: number): Promise<boolean> {
@@ -29,44 +25,9 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
-  const app = express();
+  const app = createBaseApp();
   const server = createServer(app);
-  // Configure body parser with larger size limit for file uploads.
-  // rawBody is kept for webhook HMAC signature verification.
-  app.use(
-    express.json({
-      limit: "50mb",
-      verify: (req, _res, buf) => {
-        (req as typeof req & { rawBody?: Buffer }).rawBody = buf;
-      },
-    })
-  );
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-  // Observability: request logging + a scoped request id for audit correlation.
-  app.use((req, res, next) => {
-    const requestId =
-      (req.headers["x-request-id"] as string | undefined) ??
-      `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    res.setHeader("x-request-id", requestId);
-    (req as typeof req & { requestId?: string }).requestId = requestId;
-    const start = Date.now();
-    res.on("finish", () => {
-      const ms = Date.now() - start;
-      console.log(`[http] ${req.method} ${req.originalUrl} -> ${res.statusCode} ${ms}ms rid=${requestId}`);
-    });
-    next();
-  });
-
-  registerWebhookRoutes(app);
-  // tRPC API
-  app.use(
-    "/api/trpc",
-    createExpressMiddleware({
-      router: appRouter,
-      createContext,
-    })
-  );
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
@@ -74,14 +35,8 @@ async function startServer() {
     serveStatic(app);
   }
 
-  // Centralized error handler: log server-side failures without leaking internals.
-  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error("[error]", err);
-    if (res.headersSent) {
-      return;
-    }
-    res.status(500).json({ error: "Internal server error" });
-  });
+  // Registered after static/SPA fallback so all errors are caught.
+  app.use(errorHandler);
 
   const preferredPort = parseInt(process.env.PORT || "3000");
   const port = await findAvailablePort(preferredPort);
