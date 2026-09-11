@@ -10,6 +10,8 @@
 >
 > Repo: https://github.com/SujayYadav776/Skillio · Live: https://skillio-delta.vercel.app
 > Demo staff login: `admin@skillio.test` (password documented in `ROADMAP.md`; demo-only).
+> Start with **`README.md`** — the public front page (pitch, screenshots, quick start).
+> This guide is the deep dive. The project ships under the **MIT license** (`LICENSE`).
 
 ---
 
@@ -157,6 +159,10 @@ Skillio/
 ├── scripts/build-serverless.mjs
 ├── patches/wouter@3.7.1.patch
 ├── vercel.json · vite.config.ts · vitest.config.ts · drizzle.config.ts · tsconfig.json
+├── README.md               # repo front page: pitch, badges, live screenshots, quick start
+├── PROJECT_GUIDE.md        # this document — the deep technical reference
+├── LICENSE                 # MIT (matches package.json)
+├── docs/assets/            # README screenshots (dashboard.png, cohorts.png)
 └── ROADMAP.md · TECH_STACK.md · RECOMMENDATION.md
 ```
 
@@ -791,8 +797,9 @@ Honest list (from code reading + `ROADMAP.md`/`RECOMMENDATION.md`):
   works today but should be hoisted.
 - **Decorative UI**: Cohorts export/"more filters", FollowUps "schedule campaign", header bell /
   help buttons, and MobileFollowUp's consent links have no handlers yet.
-- **Doc drift**: `TECH_STACK.md` still says MySQL/Manus-OAuth/WebDev hosting (now
-  Postgres/Supabase/Vercel) and `ROADMAP.md` trails the passport/exchange/cipher/rate-limit work.
+- **Doc drift**: `README.md` + this guide are current (2026-09-12), but `TECH_STACK.md` still
+  says MySQL/Manus-OAuth/WebDev hosting (now Postgres/Supabase/Vercel) and `ROADMAP.md` trails
+  the passport/exchange/cipher/rate-limit work.
 - **Backlog (RECOMMENDATION.md)**: magic-link/OTP auth, A5–A8 (marketplace growth, upskilling,
   alumni, PWA+i18n), multilingual messaging, Playwright E2E suite, PITR/backups, real-data
   ingestion gated on privacy sign-off.
