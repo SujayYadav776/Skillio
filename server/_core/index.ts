@@ -42,6 +42,22 @@ async function startServer() {
     })
   );
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+  // Observability: request logging + a scoped request id for audit correlation.
+  app.use((req, res, next) => {
+    const requestId =
+      (req.headers["x-request-id"] as string | undefined) ??
+      `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    res.setHeader("x-request-id", requestId);
+    (req as typeof req & { requestId?: string }).requestId = requestId;
+    const start = Date.now();
+    res.on("finish", () => {
+      const ms = Date.now() - start;
+      console.log(`[http] ${req.method} ${req.originalUrl} -> ${res.statusCode} ${ms}ms rid=${requestId}`);
+    });
+    next();
+  });
+
   registerWebhookRoutes(app);
   // tRPC API
   app.use(
@@ -57,6 +73,15 @@ async function startServer() {
   } else {
     serveStatic(app);
   }
+
+  // Centralized error handler: log server-side failures without leaking internals.
+  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("[error]", err);
+    if (res.headersSent) {
+      return;
+    }
+    res.status(500).json({ error: "Internal server error" });
+  });
 
   const preferredPort = parseInt(process.env.PORT || "3000");
   const port = await findAvailablePort(preferredPort);

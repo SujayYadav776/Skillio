@@ -10,6 +10,7 @@ import {
   jsonb,
   boolean,
   index,
+  unique,
 } from "drizzle-orm/pg-core";
 
 export const userRoleEnum = pgEnum("user_role", ["user", "admin"]);
@@ -81,6 +82,16 @@ export const jobApplicationStatusEnum = pgEnum("job_application_status", [
   "rejected",
   "withdrawn",
 ]);
+export const benefitStatusEnum = pgEnum("benefit_status", ["eligible", "applied", "approved", "received"]);
+export const caseKindEnum = pgEnum("case_kind", [
+  "escalation",
+  "grievance",
+  "wage_dispute",
+  "harassment",
+  "benefit",
+  "other",
+]);
+export const caseMessageAuthorEnum = pgEnum("case_message_author", ["staff", "employee", "system"]);
 
 // openId stores the Supabase auth user id (uuid).
 export const users = pgTable("users", {
@@ -244,6 +255,7 @@ export const counsellorCases = pgTable(
     traineeId: integer("traineeId")
       .notNull()
       .references(() => trainees.id, { onDelete: "cascade" }),
+    kind: caseKindEnum("kind").default("escalation").notNull(),
     priority: casePriorityEnum("priority").notNull(),
     title: varchar("title", { length: 160 }).notNull(),
     reason: text("reason"),
@@ -255,6 +267,23 @@ export const counsellorCases = pgTable(
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [index("counsellor_cases_trainee_idx").on(table.traineeId)]
+);
+
+// Support-desk threads. Inbound message content is never persisted; staff and
+// employee-authored replies on an escalated/grievance case are.
+export const caseMessages = pgTable(
+  "caseMessages",
+  {
+    id: serial("id").primaryKey(),
+    caseId: integer("caseId")
+      .notNull()
+      .references(() => counsellorCases.id, { onDelete: "cascade" }),
+    author: caseMessageAuthorEnum("author").notNull(),
+    authorName: varchar("authorName", { length: 160 }),
+    body: text("body").notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("case_messages_case_idx").on(table.caseId)]
 );
 
 export const auditEvents = pgTable("auditEvents", {
@@ -456,15 +485,69 @@ export const jobApplications = pgTable(
   ]
 );
 
+// Benefits & scheme eligibility (A3). Schemes carry an auditable rule set; the
+// matcher is deterministic and explainable (no ML), aligned with the product's
+// "no black-box ranking" promise.
+export const benefitSchemes = pgTable("benefitSchemes", {
+  id: serial("id").primaryKey(),
+  code: varchar("code", { length: 64 }).notNull().unique(),
+  title: varchar("title", { length: 200 }).notNull(),
+  description: text("description"),
+  agency: varchar("agency", { length: 160 }).notNull(),
+  // Null = scheme is open to all districts.
+  district: varchar("district", { length: 96 }),
+  eligibilityRules: jsonb("eligibilityRules").$type<BenefitRules>().notNull().default({}),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const employeeBenefits = pgTable(
+  "employeeBenefits",
+  {
+    id: serial("id").primaryKey(),
+    employeeId: integer("employeeId")
+      .notNull()
+      .references(() => employees.id, { onDelete: "cascade" }),
+    schemeId: integer("schemeId")
+      .notNull()
+      .references(() => benefitSchemes.id, { onDelete: "cascade" }),
+    status: benefitStatusEnum("status").default("eligible").notNull(),
+    matchedAt: timestamp("matchedAt", { withTimezone: true }),
+    appliedAt: timestamp("appliedAt", { withTimezone: true }),
+    decidedAt: timestamp("decidedAt", { withTimezone: true }),
+    notes: text("notes"),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("employee_benefits_employee_idx").on(table.employeeId),
+    index("employee_benefits_scheme_idx").on(table.schemeId),
+    unique("employee_benefits_employee_scheme_unique").on(table.employeeId, table.schemeId),
+  ]
+);
+
+// Deterministic, auditable eligibility rules. Every key is optional; an empty
+// rule set matches everyone. Wage-band checks use the midpoint of the band.
+export type BenefitRules = {
+  outcomeTypes?: string[];
+  districts?: string[];
+  requiredCourses?: string[];
+  minWageMidpoint?: number;
+  minRetentionDays?: number;
+};
+
+export type BenefitScheme = typeof benefitSchemes.$inferSelect;
+export type EmployeeBenefit = typeof employeeBenefits.$inferSelect;
+
 export type Passport = typeof passports.$inferSelect;
 export type PassportEntry = typeof passportEntries.$inferSelect;
 export type PassportShare = typeof passportShares.$inferSelect;
 export type Employer = typeof employers.$inferSelect;
 export type JobPosting = typeof jobPostings.$inferSelect;
 export type JobApplication = typeof jobApplications.$inferSelect;
-
 export type Employee = typeof employees.$inferSelect;
 export type EmployeeDocument = typeof employeeDocuments.$inferSelect;
+export type CaseMessage = typeof caseMessages.$inferSelect;
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;

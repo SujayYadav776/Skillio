@@ -5,6 +5,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
   auditEvents,
+  benefitSchemes,
   consentGrants,
   counsellorCases,
   employees,
@@ -25,6 +26,7 @@ const d = (iso: string) => new Date(iso);
 async function seed(db: SeedDb) {
   console.log("[Seed] Clearing existing domain rows (users are kept)...");
   await db.delete(employees);
+  await db.delete(benefitSchemes);
   await db.delete(auditEvents);
   await db.delete(counsellorCases);
   await db.delete(messageJobs);
@@ -365,6 +367,52 @@ async function seed(db: SeedDb) {
   await db.insert(employees).values([
     { traineeId: id("SKL-7F4K2M") }, // Asha — verified self-employment
     { traineeId: id("SKL-4M2V8A") }, // Sneha — verified formal employment
+  ]);
+
+  console.log("[Seed] Inserting benefit schemes (A3)...");
+  await db.insert(benefitSchemes).values([
+    {
+      code: "POST_PLACE_90",
+      title: "Post-placement support stipend",
+      description: "A three-month stipend for anyone who has stayed in work for at least 90 days.",
+      agency: "MSDE",
+      district: null,
+      eligibilityRules: {
+        outcomeTypes: ["self_employment", "formal_employment"],
+        minRetentionDays: 90,
+      },
+    },
+    {
+      code: "TAILOR_TOOL_PUNE",
+      title: "Tailoring tool subsidy",
+      description: "One-time ₹6,000 toward an overlock machine or tool kit, for Pune tailoring graduates.",
+      agency: "Maharashtra Skill Development Samiti",
+      district: "Pune",
+      eligibilityRules: {
+        districts: ["Pune"],
+        requiredCourses: ["Tailoring"],
+      },
+    },
+    {
+      code: "APPRENTICE_TRANSIT",
+      title: "Apprenticeship transport allowance",
+      description: "Monthly travel reimbursement for the first year of an apprenticeship.",
+      agency: "National Apprenticeship Promotion Scheme",
+      district: null,
+      eligibilityRules: {
+        outcomeTypes: ["apprenticeship"],
+      },
+    },
+    {
+      code: "UPSKILL_WAIVER",
+      title: "Second-course fee waiver",
+      description: "Waived course fee for your next skill upgrade once you are earning ₹20k or more a month.",
+      agency: "NSDC",
+      district: null,
+      eligibilityRules: {
+        minWageMidpoint: 20,
+      },
+    },
   ]);
 
   console.log("[Seed] Inserting consent grants...");

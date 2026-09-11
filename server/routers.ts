@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
+import { protectedProcedure, publicProcedure, rateLimited, router } from "./_core/trpc";
 import type { User } from "../drizzle/schema";
 import { outcomeTypeEnum } from "../drizzle/schema";
 import {
@@ -74,6 +74,25 @@ import {
   listPostings,
   referToPosting,
 } from "./exchange";
+import {
+  applyForBenefit,
+  createBenefitScheme,
+  listBenefitClaims,
+  listBenefitSchemes,
+  listEmployeeBenefits,
+  setBenefitStatus,
+} from "./benefits";
+import {
+  assignCase,
+  getCaseThread,
+  getEmployeeCase,
+  listEmployeeCases,
+  listOpenCases,
+  openGrievance,
+  postEmployeeReply,
+  postStaffReply,
+  resolveCase,
+} from "./grievances";
 
 // Staff procedures require a signed-in user (401 redirects to /login on the
 // client). Trainee-, employer- and employee-facing surfaces are reachable only
@@ -297,7 +316,7 @@ export const appRouter = router({
         })
       ),
     // Public pulse submission — authorised by the signed link, not a slug.
-    submitPulseResponse: publicProcedure
+    submitPulseResponse: rateLimited({ windowMs: 60_000, max: 20 })
       .input(
         z.object({
           token: z.string().min(1),
@@ -400,7 +419,7 @@ export const appRouter = router({
           return { accepted: true, ...link };
         })
       ),
-    submit: publicProcedure
+    submit: rateLimited({ windowMs: 60_000, max: 20 })
       .input(
         z.object({
           token: z.string().min(1),
@@ -430,7 +449,7 @@ export const appRouter = router({
           return { accepted: true, ...link };
         })
       ),
-    me: publicProcedure
+    me: rateLimited({ windowMs: 60_000, max: 30 })
       .input(z.object({ token: z.string().min(1) }))
       .query(({ input }) => runDb(async () => getEmployeePortal({ token: input.token }))),
     documents: router({
@@ -658,6 +677,104 @@ export const appRouter = router({
           if (!found) throw new NotFoundError("Provider scorecard", input.slug);
           return found;
         })
+      ),
+  }),
+  benefits: router({
+    // Employee portal (token-gated): view eligible schemes and apply.
+    mine: rateLimited({ windowMs: 60_000, max: 30 })
+      .input(z.object({ token: z.string().min(1) }))
+      .query(({ input }) => runDb(async () => listEmployeeBenefits({ token: input.token }))),
+    applyToScheme: rateLimited({ windowMs: 60_000, max: 20 })
+      .input(z.object({ token: z.string().min(1), schemeId: z.number().int().positive() }))
+      .mutation(({ input }) => runDb(async () => applyForBenefit(input))),
+    // Staff: scheme catalogue and the claims register.
+    schemes: staffProcedure
+      .input(z.object({ activeOnly: z.boolean().optional() }).optional())
+      .query(({ input }) => runDb(async () => listBenefitSchemes(input))),
+    addScheme: staffProcedure
+      .input(
+        z.object({
+          code: z.string().min(1).max(64),
+          title: z.string().min(1).max(200),
+          description: z.string().optional(),
+          agency: z.string().min(1).max(160),
+          district: z.string().optional(),
+          eligibilityRules: z
+            .object({
+              outcomeTypes: z.array(z.string()).optional(),
+              districts: z.array(z.string()).optional(),
+              requiredCourses: z.array(z.string()).optional(),
+              minWageMidpoint: z.number().optional(),
+              minRetentionDays: z.number().optional(),
+            })
+            .optional(),
+          active: z.boolean().optional(),
+        })
+      )
+      .mutation(({ input }) => runDb(async () => createBenefitScheme(input))),
+    claims: staffProcedure
+      .input(z.object({ status: z.string().optional(), district: z.string().optional() }).optional())
+      .query(({ input }) => runDb(async () => listBenefitClaims(input ?? {}))),
+    setStatus: staffProcedure
+      .input(
+        z.object({
+          benefitId: z.number().int().positive(),
+          status: z.enum(["eligible", "applied", "approved", "received"]),
+          notes: z.string().optional(),
+        })
+      )
+      .mutation(({ input }) => runDb(async () => setBenefitStatus(input))),
+  }),
+  grievance: router({
+    // Employee-portal (token-gated) support desk.
+    open: rateLimited({ windowMs: 60_000, max: 10 })
+      .input(
+        z.object({
+          token: z.string().min(1),
+          kind: z.enum(["grievance", "wage_dispute", "harassment", "benefit", "other"]),
+          subject: z.string().min(1).max(160),
+          body: z.string().min(1),
+        })
+      )
+      .mutation(({ input }) => runDb(async () => openGrievance(input))),
+    myCase: rateLimited({ windowMs: 60_000, max: 30 })
+      .input(z.object({ token: z.string().min(1), caseId: z.number().int().positive() }))
+      .query(({ input }) => runDb(async () => getEmployeeCase(input))),
+    reply: rateLimited({ windowMs: 60_000, max: 20 })
+      .input(z.object({ token: z.string().min(1), caseId: z.number().int().positive(), body: z.string().min(1) }))
+      .mutation(({ input }) => runDb(async () => postEmployeeReply(input))),
+    mine: rateLimited({ windowMs: 60_000, max: 30 })
+      .input(z.object({ token: z.string().min(1) }))
+      .query(({ input }) => runDb(async () => listEmployeeCases(input))),
+  }),
+  cases: router({
+    // Staff support-desk workbench (district-scoped).
+    list: staffProcedure
+      .input(z.object({ status: z.string().optional() }).optional())
+      .query(({ input, ctx }) =>
+        runDb(async () => listOpenCases({ district: districtScope(ctx.user), status: input?.status ?? null }))
+      ),
+    thread: staffProcedure
+      .input(z.object({ caseId: z.number().int().positive() }))
+      .query(({ input, ctx }) =>
+        runDb(async () => getCaseThread({ caseId: input.caseId, district: districtScope(ctx.user) }))
+      ),
+    reply: staffProcedure
+      .input(z.object({ caseId: z.number().int().positive(), body: z.string().min(1) }))
+      .mutation(({ input, ctx }) =>
+        runDb(async () =>
+          postStaffReply({ caseId: input.caseId, district: districtScope(ctx.user), authorName: ctx.user?.name ?? null, body: input.body })
+        )
+      ),
+    assign: staffProcedure
+      .input(z.object({ caseId: z.number().int().positive(), assignedTo: z.string().min(1) }))
+      .mutation(({ input, ctx }) =>
+        runDb(async () => assignCase({ caseId: input.caseId, district: districtScope(ctx.user), assignedTo: input.assignedTo }))
+      ),
+    resolve: staffProcedure
+      .input(z.object({ caseId: z.number().int().positive(), note: z.string().optional() }))
+      .mutation(({ input, ctx }) =>
+        runDb(async () => resolveCase({ caseId: input.caseId, district: districtScope(ctx.user), note: input.note ?? null }))
       ),
   }),
 });

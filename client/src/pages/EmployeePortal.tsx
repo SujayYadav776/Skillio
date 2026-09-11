@@ -6,6 +6,8 @@ import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis
 import { StatusPill } from "@/components/SkillioShell";
 import { PassportPanel } from "@/components/PassportPanel";
 import { EmployeeJobsPanel } from "@/components/EmployeeJobsPanel";
+import { BenefitsPanel } from "@/components/BenefitsPanel";
+import { GrievancePanel } from "@/components/GrievancePanel";
 import { trpc } from "@/lib/trpc";
 
 const TOKEN_STORAGE_KEY = "skillio-employee-token";
@@ -158,6 +160,10 @@ function PortalHome({ token }: { token: string }) {
     <PassportPanel token={token} />
 
     <EmployeeJobsPanel token={token} />
+
+    <BenefitsPanel token={token} />
+
+    <GrievancePanel token={token} />
 
     {chartData.length > 1 ? (
       <div className="rounded-[26px] bg-white p-6 shadow-[0_20px_70px_rgba(24,52,48,0.08)]">

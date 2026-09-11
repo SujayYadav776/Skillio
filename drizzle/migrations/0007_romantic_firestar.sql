@@ -1,0 +1,1 @@
+ALTER TABLE "employeeBenefits" ADD CONSTRAINT "employee_benefits_employee_scheme_unique" UNIQUE("employeeId","schemeId");

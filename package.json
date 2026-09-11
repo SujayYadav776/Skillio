@@ -12,7 +12,8 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
-    "db:seed": "tsx server/seed.ts"
+    "db:seed": "tsx server/seed.ts",
+    "db:rls": "tsx server/applyRls.ts"
   },
   "dependencies": {
     "@radix-ui/react-label": "^2.1.7",

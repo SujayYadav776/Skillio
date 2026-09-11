@@ -17,13 +17,13 @@ describe.skipIf(!hasDb)("routers integration (live database)", () => {
   beforeAll(async () => {
     // Deterministic fixture state: fresh seed with stable ids.
     await runSeed();
-  });
+  }, 60_000);
 
   afterAll(async () => {
     // Leave the demo database pristine for the app.
     await runSeed();
     await closeDb();
-  });
+  }, 60_000);
 
   describe("reads", () => {
     it("outcomes.summary aggregates the six seeded trainees", async () => {
@@ -163,7 +163,7 @@ describe.skipIf(!hasDb)("routers integration (live database)", () => {
     // Isolate from the mutation tests above: fresh seed, stable ids.
     beforeAll(async () => {
       await runSeed();
-    });
+    }, 60_000);
 
     it("employer verification link is single-use and appends a verified event", { timeout: 30_000 }, async () => {
       const link = await caller.verification.createLink({ traineeRef: "SKL-8N1T6C" });

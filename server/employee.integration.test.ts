@@ -18,12 +18,12 @@ const caller = appRouter.createCaller(makeContext());
 describe.skipIf(!hasDb)("employee portal (live database)", () => {
   beforeAll(async () => {
     await runSeed();
-  });
+  }, 60_000);
 
   afterAll(async () => {
     await runSeed();
     await closeDb();
-  });
+  }, 60_000);
 
   it("issues a portal link for a verified placement and serves the career page", { timeout: 30_000 }, async () => {
     const link = await caller.employee.createLink({ traineeRef: "SKL-7F4K2M" });

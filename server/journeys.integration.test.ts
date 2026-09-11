@@ -18,12 +18,12 @@ const caller = appRouter.createCaller(makeContext());
 describe.skipIf(!hasDb)("persona journeys (live database)", () => {
   beforeAll(async () => {
     await runSeed();
-  });
+  }, 60_000);
 
   afterAll(async () => {
     await runSeed();
     await closeDb();
-  });
+  }, 60_000);
 
   it("Asha: strong self-employment outcome with income progression and employer evidence", { timeout: 30_000 }, async () => {
     const journey = await caller.outcomes.traineeJourney({ id: "asha-patil" });
