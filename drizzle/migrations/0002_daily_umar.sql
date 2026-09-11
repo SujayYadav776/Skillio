@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "district" varchar(96);
