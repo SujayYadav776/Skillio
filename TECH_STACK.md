@@ -144,9 +144,10 @@ pnpm check
 pnpm test
 pnpm build
 pnpm drizzle-kit generate
+pnpm db:rls        # optional: enable Row-Level Security (defence-in-depth)
 ```
 
-The current project has passed `pnpm check`, `pnpm test` (95/95), and `pnpm build`. The production build splits per-screen and vendor chunks (React, charts, tRPC, UI, vendor), so no chunk trips the >500 kB advisory.
+The current project has passed `pnpm check`, `pnpm test` (113/113), and `pnpm build`. The production build splits per-screen and vendor chunks (React, charts, tRPC, UI, vendor), so no chunk trips the >500 kB advisory.
 
 ---
 

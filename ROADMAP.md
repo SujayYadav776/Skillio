@@ -1,6 +1,6 @@
 # Skillio — Build Checklist
 
-> 🕐 **Last updated: 2026-09-12** · DB is **LIVE** on Supabase (project `nrxbelpmydquivcphxry`, ap-northeast-2) · 🎉 **Phases 0–5 COMPLETE** · ▶️ **Phase 6 under way — Employee System (A1 + A2 done)** · ✅ **Suite now 95/95 passing** · Next-phase backlog: [RECOMMENDATION.md](RECOMMENDATION.md)
+> 🕐 **Last updated: 2026-09-12** · DB is **LIVE** on Supabase (project `nrxbelpmydquivcphxry`, ap-northeast-2) · 🎉 **Phases 0–5 COMPLETE** · ▶️ **Phase 6 — Employee System: A1 + A2 + A3 + A4 done** · ✅ **Suite now 113/113 passing** · Next-phase backlog: [RECOMMENDATION.md](RECOMMENDATION.md)
 
 ## 📊 Progress at a glance
 
@@ -119,12 +119,12 @@ All seven screens now render from the live database; zero `@shared/demoData` imp
 - [x] ✅ 4. `feat(ui): pages on tRPC (per-screen commits)`
 - [x] ✅ 5. `feat(messaging): provider adapter + scheduler + webhook`
 
-## 🔵 Phase 6 — Employee System (from [RECOMMENDATION.md](RECOMMENDATION.md) Theme A) — **under way**
+## 🟢 Phase 6 — Employee System (from [RECOMMENDATION.md](RECOMMENDATION.md) Theme A) — **DONE (2026-09-12)**
 
-- [x] ✅ **A1 · Employee profile & career record (2026-09-11)**: new `employees` table (1:1 with trainees, migration `0003_crazy_raider.sql`), auto-created by `createOutcomeEvent` when an employer verification lands on an employed outcome; seed adds records for Asha + Sneha. Passwordless portal links: staff-side `employee.createLink` issues a 30-day signed JWT (`/me?token=…`, stateless verification — deliberately not single-use so refreshes work); `employee.me` serves the profile (status, role, industry, skills from training records), the **wage history** from the append-only event chain, and a career timeline that excludes internal casework. New `/me` mobile-first page (lazy-loaded, token persisted to localStorage) with an income-progression chart — verified visually. Trainee journey page has a "Send employee career page link" action. Tests: 95/95 passing (employee-portal suite incl. auto-creation via employer verification, document vault, certificate shares, and rejection for unplaced trainees).
+- [x] ✅ **A1 · Employee profile & career record (2026-09-11)**: new `employees` table (1:1 with trainees, migration `0003_crazy_raider.sql`), auto-created by `createOutcomeEvent` when an employer verification lands on an employed outcome; seed adds records for Asha + Sneha. Passwordless portal links: staff-side `employee.createLink` issues a 30-day signed JWT (`/me?token=…`, stateless verification — deliberately not single-use so refreshes work); `employee.me` serves the profile (status, role, industry, skills from training records), the **wage history** from the append-only event chain, and a career timeline that excludes internal casework. New `/me` mobile-first page (lazy-loaded, token persisted to localStorage) with an income-progression chart — verified visually. Trainee journey page has a "Send employee career page link" action. Tests: 113/113 passing (employee-portal suite incl. auto-creation via employer verification, document vault, certificate shares, and rejection for unplaced trainees).
 - [x] ✅ **A2 · Documents & certificates vault (2026-09-12)**: `employeeDocuments` table + consent-scoped uploads to Supabase Storage (kind, MIME-type & size validation, retention window), signed URL downloads, delete, shareable certificate links that expose only training info, and a `purgeExpiredEmployeeDocuments` retention worker wired into the scheduler cycle.
-- [ ] ⬜ A3 · Benefits & scheme eligibility tracker
-- [ ] ⬜ A4 · Grievance & support desk (counsellorCases + kind column, case threads)
+- [x] ✅ **A3 · Benefits & scheme eligibility tracker (2026-09-12)**: `benefitSchemes` table with auditable JSON eligibility rules and `employeeBenefits` (status pipeline `eligible → applied → approved → received`). Deterministic, explainable matcher (district, outcome type, course, wage-band midpoint, retention days) — every check returns `{ label, met }` so a worker sees *why*, with no black-box scoring. Eligibility is materialised on read (`/me` "Benefits for you"), employees apply with one tap, and staff run a claims register with status transitions. Migration `0007_romantic_firestar.sql`.
+- [x] ✅ **A4 · Grievance & support desk (2026-09-12)**: `counsellorCases.kind` column (escalation / grievance / wage dispute / harassment / benefit / other) plus a `caseMessages` thread table. Employees raise a concern and converse with staff in one place (`/me` "Support & concerns"); staff work a district-scoped bench (list, thread, reply, assign, resolve). Migration `0006_eminent_ezekiel_stane.sql`.
 
 ## 🤔 Open decisions (defaults chosen; say the word to change)
 
