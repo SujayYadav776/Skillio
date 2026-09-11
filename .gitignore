@@ -18,3 +18,7 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# Vercel local
+.vercel
+.vercel-tmp

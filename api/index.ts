@@ -1,11 +1,6 @@
-import "dotenv/config";
-import { createBaseApp, errorHandler } from "../server/_core/app";
-
-// Vercel serverless entry: build the API-only Express app (tRPC + webhooks)
-// and export it as the request handler. No listen(), no scheduler, and no
-// static file serving — Vercel's CDN serves the built client from
-// dist/public, and this function only handles /api/* traffic.
-const app = createBaseApp();
-app.use(errorHandler);
-
-export default app;
+// Vercel function entry. Kept intentionally thin: it re-exports the
+// esbuild-bundled, self-contained server (dist/serverless.mjs) produced by
+// `pnpm build`. This way @vercel/node transpiles only this one file, whose
+// single relative import carries an explicit extension, avoiding the ESM
+// loader error on the codebase's extensionless internal imports.
+export { default } from "../dist/serverless.mjs";
