@@ -22,9 +22,9 @@
 | Deployment | Managed WebDev HTTPS hosting | Preview and production deployment without custom infrastructure |
 | Messaging boundary | Provider-neutral adapter | Keeps WhatsApp Cloud API or an approved aggregator separate from business logic |
 
-### Current MVP data mode
+### Current data mode
 
-The six screens render from `shared/demoData.ts` so that the judge demo works immediately and does not depend on real personal data or external messaging credentials. The database schema and tRPC procedures are already scaffolded for the next step. Synthetic data is labelled in the navigation shell.
+The seven screens render from the live Supabase database via tRPC (Phase 3+). The judge/persona experiences are run against the deterministic seed in `server/seed.ts` (six personas), so no real personal data or external messaging credentials are required. Synthetic data is labelled in the navigation shell.
 
 ### Production integrations to add later
 
@@ -146,7 +146,7 @@ pnpm build
 pnpm drizzle-kit generate
 ```
 
-The current project has passed `pnpm check`, `pnpm test`, and `pnpm build`. The production build emits a bundle-size advisory because all screens and chart components are bundled together; code splitting should be added after the judging MVP is stable.
+The current project has passed `pnpm check`, `pnpm test` (95/95), and `pnpm build`. The production build splits per-screen and vendor chunks (React, charts, tRPC, UI, vendor), so no chunk trips the >500 kB advisory.
 
 ---
 
