@@ -5,7 +5,7 @@ import { appRouter } from "./routers";
 import { makeContext } from "./testHelpers";
 import { closeDb } from "./db";
 import { runSeed } from "./seed";
-import { purgeExpiredEmployeeDocuments } from "./scheduler";
+import { purgeExpiredEmployeeDocuments } from "./queries";
 
 /**
  * A1 — Employee profile & career record: portal links, the token-gated

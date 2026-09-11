@@ -6,7 +6,9 @@ import {
   ClipboardCheck,
   FileText,
   LayoutDashboard,
+  BriefcaseBusiness,
   LifeBuoy,
+  LogOut,
   Menu,
   ShieldCheck,
   Sparkles,
@@ -17,18 +19,44 @@ import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { trpc } from "@/lib/trpc";
+import { useAuth } from "@/_core/hooks/useAuth";
 
-const navigation = [
+const BASE_NAVIGATION = [
   { label: "Command centre", path: "/", icon: LayoutDashboard },
   { label: "Cohorts & providers", path: "/cohorts", icon: BarChart3 },
   { label: "Trainee journeys", path: "/trainees/asha-patil", icon: Users },
-  { label: "Follow-up queue", path: "/follow-ups", icon: ClipboardCheck, count: 12 },
+  { label: "Placement board", path: "/placements", icon: BriefcaseBusiness },
   { label: "Skill-gap board", path: "/skill-gaps", icon: Sparkles },
 ];
 
 export default function SkillioShell({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { user, logout } = useAuth();
+  // The follow-up badge is the real queue depth, not a decorative constant.
+  const queueQuery = trpc.followUps.queue.useQuery(undefined, { retry: false });
+  const openCases = queueQuery.data?.length ?? 0;
+
+  const navigation: Array<{ label: string; path: string; icon: typeof ClipboardCheck; count?: number }> = [
+    ...BASE_NAVIGATION.slice(0, 3),
+    {
+      label: "Follow-up queue",
+      path: "/follow-ups",
+      icon: ClipboardCheck,
+      count: openCases || undefined,
+    },
+    ...BASE_NAVIGATION.slice(3),
+  ];
+
+  const displayName = user?.name ?? user?.email ?? "Signed-in staff";
+  const roleLabel = user?.role === "admin" ? "State administrator" : "District counsellor";
+  const initials = displayName
+    .split(/[\s@.]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("") || "SK";
 
   return (
     <div className="min-h-screen bg-[#f6f8f7] text-slate-900">
@@ -74,12 +102,14 @@ export default function SkillioShell({ children }: { children: React.ReactNode }
         <div className="mt-auto px-4 pb-5">
           <div className="mb-4 rounded-2xl border border-white/10 bg-white/5 p-4">
             <div className="flex items-center gap-2 text-[#b8e3d5]"><ShieldCheck className="h-4 w-4" /><span className="text-xs font-semibold">Privacy mode active</span></div>
-            <p className="mt-2 text-[11px] leading-5 text-white/55">Synthetic demo data. Consent and evidence freshness are visible on every record.</p>
+            <p className="mt-2 text-[11px] leading-5 text-white/55">Consent, evidence freshness and audit trails are enforced on every record.</p>
           </div>
           <div className="flex items-center gap-3 rounded-xl border border-white/10 px-3 py-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#d7b97b] text-xs font-bold text-[#0d2928]">AD</div>
-            <div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold">Aditi Deshmukh</p><p className="truncate text-[10px] text-white/50">State administrator</p></div>
-            <ChevronDown className="h-4 w-4 text-white/40" />
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#d7b97b] text-xs font-bold text-[#0d2928]">{initials}</div>
+            <div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold">{displayName}</p><p className="truncate text-[10px] text-white/50">{roleLabel}</p></div>
+            <button onClick={() => void logout()} className="rounded-lg p-1.5 text-white/40 hover:bg-white/10 hover:text-white" aria-label="Sign out">
+              <LogOut className="h-4 w-4" />
+            </button>
           </div>
         </div>
       </aside>
@@ -93,7 +123,7 @@ export default function SkillioShell({ children }: { children: React.ReactNode }
             <div><p className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">Government of Maharashtra</p><p className="mt-0.5 text-sm font-semibold text-slate-800">Skills, Employment & Entrepreneurship</p></div>
           </div>
           <div className="flex items-center gap-2 sm:gap-4">
-            <span className="hidden rounded-full bg-[#e3f3ed] px-3 py-1.5 text-[11px] font-semibold text-[#247563] sm:inline-flex"><span className="mr-1.5 mt-0.5 h-1.5 w-1.5 rounded-full bg-[#43a890]" />Data updated 12 min ago</span>
+            <span className="hidden rounded-full bg-[#e3f3ed] px-3 py-1.5 text-[11px] font-semibold text-[#247563] sm:inline-flex"><span className="mr-1.5 mt-0.5 h-1.5 w-1.5 rounded-full bg-[#43a890]" />{queueQuery.isLoading ? "Loading live data" : `Live register · ${openCases} open case${openCases === 1 ? "" : "s"}`}</span>
             <Button variant="ghost" size="icon" className="rounded-xl text-slate-500"><Bell className="h-4 w-4" /></Button>
             <Button variant="ghost" size="icon" className="rounded-xl text-slate-500"><LifeBuoy className="h-4 w-4" /></Button>
           </div>

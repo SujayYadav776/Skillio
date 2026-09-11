@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { Trainee as DbTrainee } from "../drizzle/schema";
 import {
+  buildEvidenceSummary,
+  buildRiskFlags,
   buildSkillGaps,
   formatDueLabel,
   formatRelativeTimestamp,
+  nextBestActionFor,
   toDashboardMetrics,
   toFollowUpCase,
+  toProviderScorecard,
   toTraineeListItem,
 } from "./mappers";
 import type { DashboardSummary } from "./queries";
@@ -183,5 +187,163 @@ describe("toDashboardMetrics", () => {
       freshness: 81,
       responseRate: "74.2%",
     });
+  });
+});
+
+describe("buildEvidenceSummary", () => {
+  const base = {
+    outcomeStatus: "verified" as const,
+    lastUpdated: NOW,
+    outcomeEvents: [],
+    now: NOW,
+  };
+
+  it("reads confidence from the stored event, never from a UI constant", () => {
+    const summary = buildEvidenceSummary({
+      ...base,
+      outcomeEvents: [
+        {
+          outcomeType: "formal_employment",
+          outcomeStatus: "verified",
+          evidenceConfidence: "0.910",
+          source: "employer_verification",
+          supersedesEventId: null,
+        },
+      ],
+    });
+    expect(summary.percent).toBe(91);
+    expect(summary.tone).toBe("teal");
+  });
+
+  it("marks a pending self-report and flags the superseded chain", () => {
+    const summary = buildEvidenceSummary({
+      ...base,
+      outcomeStatus: "pending",
+      outcomeEvents: [
+        {
+          outcomeType: "seeking_work",
+          outcomeStatus: "pending",
+          evidenceConfidence: "0.500",
+          source: "trainee_mobile",
+          supersedesEventId: null,
+        },
+        {
+          outcomeType: "formal_employment",
+          outcomeStatus: "pending",
+          evidenceConfidence: "0.640",
+          source: "trainee_mobile",
+          supersedesEventId: 1,
+        },
+      ],
+    });
+    expect(summary.tone).toBe("amber");
+    // No employer verification anywhere in the chain.
+    expect(summary.signals.find((s) => s.label === "Employer confirmation")?.state).toBe("pending");
+    expect(summary.signals.some((s) => s.label === "Superseded pulses")).toBe(true);
+  });
+});
+
+describe("nextBestActionFor", () => {
+  const base = {
+    outcomeType: "formal_employment",
+    outcomeStatus: "verified" as const,
+    barrier: null,
+    relevance: 5,
+    retentionDays: 200,
+    hasOpenCase: false,
+  };
+
+  it("prioritises placement support when the trainee is out of work", () => {
+    expect(nextBestActionFor({ ...base, outcomeType: "seeking_work" }).owner).toBe("Placement cell");
+  });
+
+  it("routes the reported barrier to its owner", () => {
+    expect(nextBestActionFor({ ...base, barrier: "Transport cost" }).owner).toBe("District officers");
+    expect(nextBestActionFor({ ...base, barrier: "Role mismatch" }).owner).toBe("Curriculum team");
+  });
+
+  it("suggests upskilling on low relevance", () => {
+    expect(nextBestActionFor({ ...base, relevance: 2 }).title).toContain("upskilling");
+  });
+
+  it("suggests mentorship for a long, relevant tenure", () => {
+    expect(nextBestActionFor({ ...base, retentionDays: 120 }).owner).toBe("Alumni cell");
+  });
+
+  it("asks for employer evidence when the outcome is pending", () => {
+    expect(nextBestActionFor({ ...base, outcomeStatus: "pending" }).title).toContain("verification link");
+  });
+});
+
+describe("buildRiskFlags", () => {
+  const base = {
+    outcomeType: "formal_employment",
+    relevance: 5,
+    retentionDays: 200,
+    barrier: null,
+    daysSinceUpdate: 10,
+    unansweredReminders: 0,
+    previousWageMidpoint: 14.5,
+    currentWageMidpoint: 14.5,
+  };
+
+  it("raises nothing for a healthy, current outcome", () => {
+    expect(buildRiskFlags(base).flags).toEqual([]);
+    expect(buildRiskFlags(base).level).toBe("watch");
+  });
+
+  it("names the fact behind every flag", () => {
+    const risk = buildRiskFlags({
+      ...base,
+      relevance: 1,
+      retentionDays: 30,
+      barrier: "Transport cost",
+      unansweredReminders: 2,
+    });
+    expect(risk.level).toBe("high");
+    for (const flag of risk.flags) {
+      expect(flag.detail.length).toBeGreaterThan(0);
+      expect(flag.weight).toBeGreaterThan(0);
+    }
+    expect(risk.flags.map((f) => f.code)).toContain("silent_after_reminders");
+  });
+
+  it("detects a wage band decline", () => {
+    const risk = buildRiskFlags({ ...base, previousWageMidpoint: 20, currentWageMidpoint: 12 });
+    expect(risk.flags.map((f) => f.code)).toContain("wage_decline");
+    expect(risk.score).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("toProviderScorecard", () => {
+  it("suppresses figures below the privacy threshold", () => {
+    const card = toProviderScorecard({
+      provider: "Pune Skill Institute",
+      districts: ["Pune"],
+      completed: 4,
+      verified: 0.5,
+      retention: 0.5,
+      relevance: 4,
+    });
+    expect(card.published).toBe(false);
+    expect(card.verified).toBeNull();
+    expect(card.suppressionNote).toContain("suppressed");
+    expect(card.slug).toBe("pune-skill-institute");
+  });
+
+  it("publishes rounded figures at or above the threshold", () => {
+    const card = toProviderScorecard({
+      provider: "Nashik ITI",
+      districts: ["Nashik", "Pune"],
+      completed: 24,
+      verified: 0.625,
+      retention: 0.5,
+      relevance: 3.94,
+    });
+    expect(card.published).toBe(true);
+    expect(card.verified).toBe(63);
+    expect(card.retention).toBe(50);
+    expect(card.relevance).toBe(3.9);
+    expect(card.suppressionNote).toBeNull();
   });
 });

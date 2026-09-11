@@ -42,11 +42,57 @@ describe("staff procedures reject anonymous callers", () => {
     ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
 
-  it("traineeJourney stays public for the mobile flow", async () => {
-    // Auth passes (no user needed), then the missing database is surfaced.
+  it("traineeJourney is no longer reachable by slug", async () => {
+    // The public by-slug read was closed: the register must not be enumerable.
     await expect(
       anonymous.outcomes.traineeJourney({ id: "asha-patil" })
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("outcomes.watchlist fails with UNAUTHORIZED", async () => {
+    await expect(anonymous.outcomes.watchlist()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("exchange.refer fails with UNAUTHORIZED", async () => {
+    await expect(
+      anonymous.exchange.refer({ traineeRef: "SK-0001", postingId: 1 })
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("passport.revoke fails with UNAUTHORIZED", async () => {
+    await expect(
+      anonymous.passport.revoke({ traineeRef: "SK-0001", reason: "test" })
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+});
+
+describe("capability-gated public surfaces", () => {
+  const anonymous = appRouter.createCaller(makeContext(null));
+
+  it("a forged pulse link is rejected without touching the database", async () => {
+    await expect(
+      anonymous.outcomes.traineePulse({ token: "not-a-real-token" })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("a forged pulse submission is rejected", async () => {
+    await expect(
+      anonymous.followUps.submitPulseResponse({
+        token: "not-a-real-token",
+        outcomeType: "formal_employment",
+        consentToContact: true,
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("the passport view and scorecards stay public", async () => {
+    // Public by design; the missing database is surfaced instead of a 401.
+    await expect(
+      anonymous.passport.view({ publicId: "unknown" })
     ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    await expect(anonymous.scorecards.list()).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+    });
   });
 });
 

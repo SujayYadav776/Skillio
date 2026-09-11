@@ -8,6 +8,7 @@ import {
   timestamp,
   numeric,
   jsonb,
+  boolean,
   index,
 } from "drizzle-orm/pg-core";
 
@@ -56,6 +57,29 @@ export const documentKindEnum = pgEnum("document_kind", [
   "payslip",
   "id_document",
   "other",
+]);
+export const passportStatusEnum = pgEnum("passport_status", ["draft", "published", "revoked"]);
+export const passportEntryKindEnum = pgEnum("passport_entry_kind", [
+  "training",
+  "employment",
+  "skill",
+]);
+export const evidenceLevelEnum = pgEnum("evidence_level", [
+  "self_reported",
+  "employer_confirmed",
+  "verified",
+]);
+export const passportShareScopeEnum = pgEnum("passport_share_scope", ["summary", "full"]);
+export const employerStatusEnum = pgEnum("employer_status", ["active", "paused"]);
+export const jobPostingStatusEnum = pgEnum("job_posting_status", ["open", "closed", "filled"]);
+export const jobApplicationStatusEnum = pgEnum("job_application_status", [
+  "matched",
+  "referred",
+  "applied",
+  "interviewing",
+  "placed",
+  "rejected",
+  "withdrawn",
 ]);
 
 // openId stores the Supabase auth user id (uuid).
@@ -293,6 +317,151 @@ export const employeeDocuments = pgTable(
   },
   (table) => [index("employee_documents_employee_idx").on(table.employeeId)]
 );
+
+// The Verified Career Passport: a signed, revocable, consent-gated snapshot of
+// a trainee's verified claims. Only verified or employer-confirmed claims are
+// ever copied into passportEntries.
+export const passports = pgTable(
+  "passports",
+  {
+    id: serial("id").primaryKey(),
+    traineeId: integer("traineeId")
+      .notNull()
+      .unique()
+      .references(() => trainees.id, { onDelete: "cascade" }),
+    // Unguessable, shareable handle used by the public verification page.
+    publicId: varchar("publicId", { length: 24 }).notNull().unique(),
+    status: passportStatusEnum("status").default("draft").notNull(),
+    headlineRole: varchar("headlineRole", { length: 120 }),
+    headlineIndustry: varchar("headlineIndustry", { length: 120 }),
+    district: varchar("district", { length: 96 }),
+    verifiedTenureDays: integer("verifiedTenureDays").default(0).notNull(),
+    // Field-level sharing choices; wage bands and employer names are opt-in.
+    shareWageBands: boolean("shareWageBands").default(false).notNull(),
+    shareEmployerNames: boolean("shareEmployerNames").default(false).notNull(),
+    // SHA-256 over the canonical entry set: recomputed on read to detect tampering.
+    contentHash: varchar("contentHash", { length: 64 }),
+    publishedAt: timestamp("publishedAt", { withTimezone: true }),
+    revokedAt: timestamp("revokedAt", { withTimezone: true }),
+    revokeReason: varchar("revokeReason", { length: 200 }),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("passports_status_idx").on(table.status)]
+);
+
+export const passportEntries = pgTable(
+  "passportEntries",
+  {
+    id: serial("id").primaryKey(),
+    passportId: integer("passportId")
+      .notNull()
+      .references(() => passports.id, { onDelete: "cascade" }),
+    kind: passportEntryKindEnum("kind").notNull(),
+    title: varchar("title", { length: 160 }).notNull(),
+    subtitle: varchar("subtitle", { length: 200 }),
+    startDate: timestamp("startDate", { withTimezone: true }),
+    endDate: timestamp("endDate", { withTimezone: true }),
+    district: varchar("district", { length: 96 }),
+    roleCategory: varchar("roleCategory", { length: 120 }),
+    industry: varchar("industry", { length: 120 }),
+    wageBand: varchar("wageBand", { length: 64 }),
+    evidenceLevel: evidenceLevelEnum("evidenceLevel").notNull(),
+    source: varchar("source", { length: 64 }).notNull(),
+    sourceId: integer("sourceId"),
+    displayOrder: integer("displayOrder").default(0).notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("passport_entries_passport_idx").on(table.passportId)]
+);
+
+// Revocable share links. The link is a signed JWT whose jti lives here, so a
+// share can be listed, counted and revoked — unlike single-use tokens.
+export const passportShares = pgTable(
+  "passportShares",
+  {
+    id: serial("id").primaryKey(),
+    passportId: integer("passportId")
+      .notNull()
+      .references(() => passports.id, { onDelete: "cascade" }),
+    jti: varchar("jti", { length: 64 }).notNull().unique(),
+    recipientLabel: varchar("recipientLabel", { length: 120 }),
+    scope: passportShareScopeEnum("scope").default("summary").notNull(),
+    expiresAt: timestamp("expiresAt", { withTimezone: true }).notNull(),
+    viewCount: integer("viewCount").default(0).notNull(),
+    lastViewedAt: timestamp("lastViewedAt", { withTimezone: true }),
+    revokedAt: timestamp("revokedAt", { withTimezone: true }),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("passport_shares_passport_idx").on(table.passportId)]
+);
+
+// Employer registry. Employers are promoted from the free-text verification
+// flow so postings and referrals can point at a real, verifiable entity.
+export const employers = pgTable(
+  "employers",
+  {
+    id: serial("id").primaryKey(),
+    name: varchar("name", { length: 160 }).notNull().unique(),
+    slug: varchar("slug", { length: 160 }).notNull().unique(),
+    industry: varchar("industry", { length: 120 }),
+    district: varchar("district", { length: 96 }),
+    status: employerStatusEnum("status").default("active").notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("employers_district_idx").on(table.district)]
+);
+
+export const jobPostings = pgTable(
+  "jobPostings",
+  {
+    id: serial("id").primaryKey(),
+    employerId: integer("employerId")
+      .notNull()
+      .references(() => employers.id, { onDelete: "cascade" }),
+    title: varchar("title", { length: 160 }).notNull(),
+    roleCategory: varchar("roleCategory", { length: 120 }).notNull(),
+    district: varchar("district", { length: 96 }).notNull(),
+    wageBand: varchar("wageBand", { length: 64 }),
+    courseTags: jsonb("courseTags").$type<string[]>().default([]).notNull(),
+    seats: integer("seats").default(1).notNull(),
+    status: jobPostingStatusEnum("status").default("open").notNull(),
+    closesAt: timestamp("closesAt", { withTimezone: true }),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("job_postings_status_idx").on(table.status)]
+);
+
+export const jobApplications = pgTable(
+  "jobApplications",
+  {
+    id: serial("id").primaryKey(),
+    traineeId: integer("traineeId")
+      .notNull()
+      .references(() => trainees.id, { onDelete: "cascade" }),
+    postingId: integer("postingId")
+      .notNull()
+      .references(() => jobPostings.id, { onDelete: "cascade" }),
+    status: jobApplicationStatusEnum("status").default("matched").notNull(),
+    referredBy: varchar("referredBy", { length: 120 }),
+    // Deterministic match score + the factor breakdown that produced it.
+    matchScore: integer("matchScore").default(0).notNull(),
+    matchFactors: jsonb("matchFactors").$type<Array<{ label: string; points: number; detail: string }>>(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("job_applications_trainee_idx").on(table.traineeId),
+    index("job_applications_posting_idx").on(table.postingId),
+  ]
+);
+
+export type Passport = typeof passports.$inferSelect;
+export type PassportEntry = typeof passportEntries.$inferSelect;
+export type PassportShare = typeof passportShares.$inferSelect;
+export type Employer = typeof employers.$inferSelect;
+export type JobPosting = typeof jobPostings.$inferSelect;
+export type JobApplication = typeof jobApplications.$inferSelect;
 
 export type Employee = typeof employees.$inferSelect;
 export type EmployeeDocument = typeof employeeDocuments.$inferSelect;

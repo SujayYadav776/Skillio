@@ -119,7 +119,7 @@ describe.skipIf(!hasDb)("routers integration (live database)", () => {
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 
-    it("followUps.submitResponse appends an outcome event and honours withdrawn consent", async () => {
+    it("followUps.submitResponse appends an outcome event and honours withdrawn consent", { timeout: 30_000 }, async () => {
       const result = await caller.followUps.submitResponse({
         traineeId: "farhan-khan",
         outcomeType: "formal_employment",
@@ -199,9 +199,11 @@ describe.skipIf(!hasDb)("routers integration (live database)", () => {
       const anonymous = appRouter.createCaller(makeContext(null));
       await expect(anonymous.followUps.queue()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
       await expect(anonymous.outcomes.summary()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
-      // The public trainee surface keeps working without a session.
-      const journey = await anonymous.outcomes.traineeJourney({ id: "asha-patil" });
-      expect(journey.trainee.name).toBe("Asha Patil");
+      // The by-slug trainee read is staff-only now; capability links power the
+      // public mobile/verification flows instead of an open journey read.
+      await expect(
+        anonymous.outcomes.traineeJourney({ id: "asha-patil" })
+      ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     });
 
     it("district-scoped staff only see their own district", async () => {

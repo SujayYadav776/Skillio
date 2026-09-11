@@ -12,42 +12,72 @@ import {
   NotFoundError,
   createCertificateShareLink,
   createEmployeeLink,
+  createTraineePulseLink,
   createVerificationLink,
   deleteEmployeeDocument,
   employeeDocumentUrl,
+  escalateTrainee,
   getConsentStatus,
   getCohortPerformance,
   getDashboardSummary,
   getEmployeePortal,
   getPublicCertificate,
+  getRiskWatchlist,
   getTraineeJourney,
+  getTraineePulse,
   listEmployeeDocuments,
   listFollowUpQueue,
+  listProviderScorecards,
   listRecentMessageJobs,
   listSkillGaps,
   listTrainees,
   sendManualOutreach,
   submitEmployerVerification,
+  submitTraineePulseResponse,
   submitTraineeResponse,
   uploadEmployeeDocument,
   withdrawConsent,
 } from "./queries";
 import {
+  buildEvidenceSummary,
   buildSkillGaps,
+  nextBestActionFor,
   toCohortPerformance,
   toDashboardMetrics,
   toDistrictPerformance,
   toFollowUpCase,
   toMessageActivity,
   toOutcomeMix,
+  toProviderScorecard,
   toRetentionSeries,
   toTraineeListItem,
   toWageSeries,
 } from "./mappers";
+import {
+  createPassportShare,
+  getEmployeePassport,
+  getPublicPassport,
+  publishPassport,
+  revokePassportForTrainee,
+  revokePassportOnConsentWithdrawal,
+  revokePassportShare,
+  verifyPassportIntegrity,
+} from "./passport";
+import {
+  applyToPosting,
+  confirmPlacement,
+  createPosting,
+  getPlacementBoard,
+  listApplications,
+  listEmployeeMatches,
+  listEmployers,
+  listPostings,
+  referToPosting,
+} from "./exchange";
 
 // Staff procedures require a signed-in user (401 redirects to /login on the
-// client). Trainee- and employer-facing surfaces stay public: the mobile
-// follow-up wizard and the token-gated employer verification form.
+// client). Trainee-, employer- and employee-facing surfaces are reachable only
+// with a signed capability link.
 const staffProcedure = protectedProcedure;
 
 /**
@@ -70,6 +100,8 @@ async function runDb<T>(fn: () => Promise<T>): Promise<T> {
       });
     }
     if (error instanceof NotFoundError) {
+      // A bad capability link is indistinguishable from a missing record, by
+      // design: probing for valid links must not be rewarded with information.
       throw new TRPCError({ code: "NOT_FOUND", message: error.message });
     }
     if (error instanceof InputValidationError) {
@@ -128,19 +160,83 @@ export const appRouter = router({
           return rows.map((row) => toTraineeListItem(row));
         })
       ),
-    // Public read-by-slug: the trainee-facing mobile wizard greets through it.
-    // Full token-gating of the mobile surface is the next privacy milestone.
-    traineeJourney: publicProcedure
+    // Staff journey view: full operational record plus the evidence readout and
+    // the rule-based recommendation the page renders.
+    traineeJourney: staffProcedure
       .input(z.object({ id: z.string().min(1) }))
-      .query(({ input }) =>
+      .query(({ input, ctx }) =>
         runDb(async () => {
           const journey = await getTraineeJourney(input.id);
+          const scope = districtScope(ctx.user);
+          if (scope && journey.trainee.district !== scope) {
+            // A district-scoped counsellor must not read another district's record.
+            throw new NotFoundError("Trainee", input.id);
+          }
+          const trainee = toTraineeListItem(journey.trainee);
+          const evidence = buildEvidenceSummary({
+            outcomeStatus: journey.trainee.outcomeStatus,
+            lastUpdated: journey.trainee.lastUpdated,
+            outcomeEvents: journey.outcomeEvents.map((event) => ({
+              outcomeType: event.outcomeType,
+              outcomeStatus: journey.trainee.outcomeStatus,
+              evidenceConfidence: event.evidenceConfidence,
+              source: event.source,
+              supersedesEventId: event.supersedesEventId,
+            })),
+          });
+          const nextBestAction = nextBestActionFor({
+            outcomeType: journey.trainee.outcomeType,
+            outcomeStatus: journey.trainee.outcomeStatus,
+            barrier: journey.trainee.barrier,
+            relevance: journey.trainee.relevance,
+            retentionDays: journey.trainee.retentionDays,
+            hasOpenCase: journey.counsellorCases.some((item) =>
+              ["open", "assigned"].includes(item.status)
+            ),
+          });
           return {
-            trainee: toTraineeListItem(journey.trainee),
+            trainee,
             timeline: journey.timeline,
+            evidence,
+            nextBestAction,
+            consent: journey.consentGrants.map((grant) => ({
+              purposeCode: grant.purposeCode,
+              status: grant.status,
+              expiresAt: grant.expiresAt ? grant.expiresAt.toISOString() : null,
+              noticeVersion: grant.noticeVersion,
+            })),
+            openCases: journey.counsellorCases.filter((item) =>
+              ["open", "assigned"].includes(item.status)
+            ).length,
           };
         })
       ),
+    // Trainee-facing read: reachable only with a signed pulse link, so the
+    // register can no longer be enumerated by slug.
+    traineePulse: publicProcedure
+      .input(z.object({ token: z.string().min(1) }))
+      .query(({ input }) =>
+        runDb(async () => {
+          const trainee = await getTraineePulse({ token: input.token });
+          return { trainee: toTraineeListItem(trainee) };
+        })
+      ),
+    // Explainable attrition-risk watchlist.
+    watchlist: staffProcedure.query(({ ctx }) =>
+      runDb(async () => {
+        const scope = districtScope(ctx.user);
+        const rows = await getRiskWatchlist();
+        return rows
+          .filter((row) => !scope || row.trainee.district === scope)
+          .slice(0, 25)
+          .map((row) => ({
+            trainee: toTraineeListItem(row.trainee),
+            score: row.score,
+            level: row.level,
+            flags: row.flags,
+          }));
+      })
+    ),
   }),
   followUps: router({
     queue: staffProcedure.query(({ ctx }) =>
@@ -173,9 +269,11 @@ export const appRouter = router({
             channel: input.channel,
             providerMessageId: result.providerMessageId,
             duplicate: result.duplicate,
+            failed: "failed" in result ? (result.failed ?? null) : null,
           };
         })
       ),
+    // Staff-only fallback used by the desktop journey page.
     submitResponse: staffProcedure
       .input(
         z.object({
@@ -194,6 +292,59 @@ export const appRouter = router({
             wageBand: input.wageBand ?? null,
             relevance: input.relevance ?? null,
             consentToContact: input.consentToContact,
+          });
+          return { accepted: true, ...result };
+        })
+      ),
+    // Public pulse submission — authorised by the signed link, not a slug.
+    submitPulseResponse: publicProcedure
+      .input(
+        z.object({
+          token: z.string().min(1),
+          outcomeType: z.enum(outcomeTypeEnum.enumValues),
+          wageBand: z.string().optional(),
+          relevance: z.number().min(1).max(5).optional(),
+          consentToContact: z.boolean(),
+        })
+      )
+      .mutation(({ input }) =>
+        runDb(async () => {
+          const result = await submitTraineePulseResponse({
+            token: input.token,
+            outcomeType: input.outcomeType,
+            wageBand: input.wageBand ?? null,
+            relevance: input.relevance ?? null,
+            consentToContact: input.consentToContact,
+          });
+          return { accepted: true, ...result };
+        })
+      ),
+    createPulseLink: staffProcedure
+      .input(z.object({ traineeRef: z.string().min(1), ttlDays: z.number().int().min(1).max(90).optional() }))
+      .mutation(({ input }) =>
+        runDb(async () => {
+          const link = await createTraineePulseLink({
+            traineeRef: input.traineeRef,
+            ttlDays: input.ttlDays,
+          });
+          return { accepted: true, ...link };
+        })
+      ),
+    escalate: staffProcedure
+      .input(
+        z.object({
+          traineeRef: z.string().min(1),
+          priority: z.enum(["P1", "P2", "P3", "P4"]).optional(),
+          reason: z.string().max(400).optional(),
+        })
+      )
+      .mutation(({ input, ctx }) =>
+        runDb(async () => {
+          const result = await escalateTrainee({
+            traineeRef: input.traineeRef,
+            priority: input.priority,
+            reason: input.reason,
+            assignedTo: ctx.user?.name ?? null,
           });
           return { accepted: true, ...result };
         })
@@ -223,19 +374,24 @@ export const appRouter = router({
             slug: input.traineeId,
             purposeCode: input.purposeCode,
           });
+          // A passport only exists to be shared publicly, so withdrawing the
+          // consent that authorised it revokes the document and its links.
+          const passport = await revokePassportOnConsentWithdrawal(
+            result.traineeId,
+            input.purposeCode
+          );
           return {
             accepted: true,
             traineeId: input.traineeId,
             purposeCode: input.purposeCode,
             cancelledFutureTasks: result.cancelledTaskCount > 0,
             auditEventId: result.auditEventId,
+            passportRevoked: passport.revoked,
           };
         })
       ),
   }),
   verification: router({
-    // Issues a single-use link for the public verification surface. The
-    // provider-signed delivery of this link arrives with Phase 4 messaging.
     createLink: staffProcedure
       .input(z.object({ traineeRef: z.string().min(1) }))
       .mutation(({ input }) =>
@@ -266,7 +422,6 @@ export const appRouter = router({
       ),
   }),
   employee: router({
-    // Staff issue a passwordless portal link to a placed trainee.
     createLink: staffProcedure
       .input(z.object({ traineeRef: z.string().min(1) }))
       .mutation(({ input }) =>
@@ -275,8 +430,6 @@ export const appRouter = router({
           return { accepted: true, ...link };
         })
       ),
-    // Token-gated: the portal link itself is the session (30-day signed JWT).
-    // Token travels as input so the staff Bearer header never collides with it.
     me: publicProcedure
       .input(z.object({ token: z.string().min(1) }))
       .query(({ input }) => runDb(async () => getEmployeePortal({ token: input.token }))),
@@ -296,15 +449,16 @@ export const appRouter = router({
           })
         )
         .mutation(({ input }) => runDb(async () => uploadEmployeeDocument(input))),
+      // A mutation, not a query: each call mints a fresh 5-minute capability
+      // URL, so it must never be cached by the query client.
       url: publicProcedure
         .input(z.object({ token: z.string().min(1), documentId: z.number().int().positive() }))
-        .query(({ input }) => runDb(async () => employeeDocumentUrl(input))),
+        .mutation(({ input }) => runDb(async () => employeeDocumentUrl(input))),
       delete: publicProcedure
         .input(z.object({ token: z.string().min(1), documentId: z.number().int().positive() }))
         .mutation(({ input }) => runDb(async () => deleteEmployeeDocument(input))),
     }),
     certificates: router({
-      // Employee shares one of their completed courses; the link is public.
       createShareLink: publicProcedure
         .input(z.object({ token: z.string().min(1), trainingRecordId: z.number().int().positive() }))
         .mutation(({ input }) => runDb(async () => createCertificateShareLink(input))),
@@ -312,6 +466,199 @@ export const appRouter = router({
         .input(z.object({ token: z.string().min(1) }))
         .query(({ input }) => runDb(async () => getPublicCertificate({ token: input.token }))),
     }),
+  }),
+  passport: router({
+    // Employee-facing: the portal link is the session.
+    me: publicProcedure
+      .input(z.object({ token: z.string().min(1) }))
+      .query(({ input }) => runDb(async () => getEmployeePassport({ token: input.token }))),
+    publish: publicProcedure
+      .input(
+        z.object({
+          token: z.string().min(1),
+          shareWageBands: z.boolean().optional(),
+          shareEmployerNames: z.boolean().optional(),
+        })
+      )
+      .mutation(({ input }) =>
+        runDb(async () =>
+          publishPassport({
+            token: input.token,
+            shareWageBands: input.shareWageBands,
+            shareEmployerNames: input.shareEmployerNames,
+          })
+        )
+      ),
+    createShare: publicProcedure
+      .input(
+        z.object({
+          token: z.string().min(1),
+          recipientLabel: z.string().max(120).optional(),
+          scope: z.enum(["summary", "full"]).optional(),
+          ttlDays: z.number().int().min(1).max(365).optional(),
+        })
+      )
+      .mutation(({ input }) =>
+        runDb(async () =>
+          createPassportShare({
+            token: input.token,
+            recipientLabel: input.recipientLabel,
+            scope: input.scope,
+            ttlDays: input.ttlDays,
+          })
+        )
+      ),
+    revokeShare: publicProcedure
+      .input(z.object({ token: z.string().min(1), shareId: z.number().int().positive() }))
+      .mutation(({ input }) =>
+        runDb(async () => revokePassportShare({ token: input.token, shareId: input.shareId }))
+      ),
+    // Public verification surface: no login, the link (or the public id alone)
+    // is the capability.
+    view: publicProcedure
+      .input(z.object({ publicId: z.string().min(1), shareToken: z.string().optional() }))
+      .query(({ input }) =>
+        runDb(async () =>
+          getPublicPassport({ publicId: input.publicId, shareToken: input.shareToken ?? null })
+        )
+      ),
+    verify: publicProcedure
+      .input(z.object({ publicId: z.string().min(1) }))
+      .query(({ input }) => runDb(async () => verifyPassportIntegrity({ publicId: input.publicId }))),
+    // Staff kill-switch.
+    revoke: staffProcedure
+      .input(z.object({ traineeRef: z.string().min(1), reason: z.string().min(3).max(200) }))
+      .mutation(({ input }) =>
+        runDb(async () => {
+          const result = await revokePassportForTrainee({
+            traineeRef: input.traineeRef,
+            reason: input.reason,
+          });
+          return { accepted: true, ...result };
+        })
+      ),
+  }),
+  exchange: router({
+    employers: staffProcedure.query(() => runDb(async () => listEmployers())),
+    postings: staffProcedure
+      .input(z.object({ district: z.string().optional(), includeClosed: z.boolean().optional() }).optional())
+      .query(({ input, ctx }) =>
+        runDb(async () => {
+          const scope = districtScope(ctx.user);
+          return listPostings({
+            district: scope ?? input?.district,
+            includeClosed: input?.includeClosed,
+          });
+        })
+      ),
+    createPosting: staffProcedure
+      .input(
+        z.object({
+          employerName: z.string().min(2).max(160),
+          industry: z.string().max(120).optional(),
+          district: z.string().min(2).max(96),
+          title: z.string().min(2).max(160),
+          roleCategory: z.string().min(2).max(120),
+          wageBand: z.string().max(64).optional(),
+          courseTags: z.array(z.string().max(120)).max(12).optional(),
+          seats: z.number().int().min(1).max(500).optional(),
+        })
+      )
+      .mutation(({ input }) =>
+        runDb(async () => {
+          const result = await createPosting({
+            employerName: input.employerName,
+            industry: input.industry ?? null,
+            district: input.district,
+            title: input.title,
+            roleCategory: input.roleCategory,
+            wageBand: input.wageBand ?? null,
+            courseTags: input.courseTags,
+            seats: input.seats,
+          });
+          return { accepted: true, ...result };
+        })
+      ),
+    board: staffProcedure
+      .input(z.object({ district: z.string().optional() }).optional())
+      .query(({ input, ctx }) =>
+        runDb(async () => {
+          const scope = districtScope(ctx.user);
+          return getPlacementBoard({ district: scope ?? input?.district });
+        })
+      ),
+    refer: staffProcedure
+      .input(z.object({ traineeRef: z.string().min(1), postingId: z.number().int().positive() }))
+      .mutation(({ input, ctx }) =>
+        runDb(async () => {
+          const result = await referToPosting({
+            traineeRef: input.traineeRef,
+            postingId: input.postingId,
+            referredBy: ctx.user?.name ?? null,
+          });
+          return { accepted: true, ...result };
+        })
+      ),
+    applications: staffProcedure
+      .input(z.object({ district: z.string().optional() }).optional())
+      .query(({ input, ctx }) =>
+        runDb(async () => {
+          const scope = districtScope(ctx.user);
+          const rows = await listApplications({ district: scope ?? input?.district });
+          return rows.map((row) => ({
+            ...row,
+            createdAt: row.createdAt.toISOString(),
+          }));
+        })
+      ),
+    confirmPlacement: staffProcedure
+      .input(
+        z.object({
+          applicationId: z.number().int().positive(),
+          roleCategory: z.string().max(120).optional(),
+          wageBand: z.string().max(64).optional(),
+        })
+      )
+      .mutation(({ input }) =>
+        runDb(async () => {
+          const result = await confirmPlacement({
+            applicationId: input.applicationId,
+            roleCategory: input.roleCategory ?? null,
+            wageBand: input.wageBand ?? null,
+          });
+          return { accepted: true, ...result };
+        })
+      ),
+    // Employee-facing (portal token): matched roles and one-tap apply.
+    matches: publicProcedure
+      .input(z.object({ token: z.string().min(1) }))
+      .query(({ input }) => runDb(async () => listEmployeeMatches({ token: input.token }))),
+    // Named applyToPosting, not apply: tRPC reserves prototype method names.
+    applyToPosting: publicProcedure
+      .input(z.object({ token: z.string().min(1), postingId: z.number().int().positive() }))
+      .mutation(({ input }) =>
+        runDb(async () => {
+          const result = await applyToPosting({ token: input.token, postingId: input.postingId });
+          return { accepted: true, ...result };
+        })
+      ),
+  }),
+  scorecards: router({
+    // Public accountability surface: provider performance, sample sizes under
+    // ten suppressed.
+    list: publicProcedure.query(() =>
+      runDb(async () => (await listProviderScorecards()).map((row) => toProviderScorecard(row)))
+    ),
+    byProvider: publicProcedure
+      .input(z.object({ slug: z.string().min(1) }))
+      .query(({ input }) =>
+        runDb(async () => {
+          const rows = (await listProviderScorecards()).map((row) => toProviderScorecard(row));
+          const found = rows.find((row) => row.slug === input.slug);
+          if (!found) throw new NotFoundError("Provider scorecard", input.slug);
+          return found;
+        })
+      ),
   }),
 });
 

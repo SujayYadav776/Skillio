@@ -19,6 +19,9 @@ const EmployerVerification = lazy(() => import("./pages/EmployerVerification"));
 const SkillGaps = lazy(() => import("./pages/SkillGaps"));
 const EmployeePortal = lazy(() => import("./pages/EmployeePortal"));
 const CertificateView = lazy(() => import("./pages/CertificateView"));
+const PassportView = lazy(() => import("./pages/PassportView"));
+const PlacementBoard = lazy(() => import("./pages/PlacementBoard"));
+const Scorecards = lazy(() => import("./pages/Scorecards"));
 
 function RouteFallback() {
   return (
@@ -34,6 +37,9 @@ function Router() {
     <Route path="/login" component={Login} />
     <Route path="/me" component={EmployeePortal} />
     <Route path="/certificates" component={CertificateView} />
+    <Route path="/passport/:publicId" component={PassportView} />
+    <Route path="/scorecards" component={Scorecards} />
+    <Route path="/scorecards/:slug" component={Scorecards} />
     <Route path="/follow-up/mobile" component={MobileFollowUp} />
     <Route path="/verify/employer" component={EmployerVerification} />
     <Route path="/" component={CommandCentre} />
@@ -41,6 +47,7 @@ function Router() {
     <Route path="/trainees/:id" component={TraineeJourney} />
     <Route path="/follow-ups" component={FollowUps} />
     <Route path="/skill-gaps" component={SkillGaps} />
+    <Route path="/placements" component={PlacementBoard} />
     <Route path="/404" component={NotFound} />
     <Route component={NotFound} />
   </Switch></Suspense>;
@@ -48,7 +55,15 @@ function Router() {
 
 function App() {
   const [location] = useLocation();
-  const focusedFlow = location.startsWith("/login") || location.startsWith("/me") || location.startsWith("/certificates") || location.startsWith("/follow-up/mobile") || location.startsWith("/verify/employer");
+  // Public capability surfaces render without the staff shell.
+  const focusedFlow =
+    location.startsWith("/login") ||
+    location.startsWith("/me") ||
+    location.startsWith("/certificates") ||
+    location.startsWith("/passport/") ||
+    location.startsWith("/scorecards") ||
+    location.startsWith("/follow-up/mobile") ||
+    location.startsWith("/verify/employer");
   return <ErrorBoundary><ThemeProvider defaultTheme="light"><TooltipProvider><Toaster />{focusedFlow ? <Router /> : <SkillioShell><Router /></SkillioShell>}</TooltipProvider></ThemeProvider></ErrorBoundary>;
 }
 

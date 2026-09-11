@@ -4,6 +4,8 @@ import { useSearch } from "wouter";
 import { toast } from "sonner";
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { StatusPill } from "@/components/SkillioShell";
+import { PassportPanel } from "@/components/PassportPanel";
+import { EmployeeJobsPanel } from "@/components/EmployeeJobsPanel";
 import { trpc } from "@/lib/trpc";
 
 const TOKEN_STORAGE_KEY = "skillio-employee-token";
@@ -152,6 +154,10 @@ function PortalHome({ token }: { token: string }) {
         <span className="inline-flex items-center gap-1.5 rounded-lg bg-slate-50 px-2.5 py-1.5 text-[11px] text-slate-500"><Clock3 className="h-3.5 w-3.5" />{profile.retentionDays ? `${profile.retentionDays} days in work` : "Starting out"}</span>
       </div>
     </div>
+
+    <PassportPanel token={token} />
+
+    <EmployeeJobsPanel token={token} />
 
     {chartData.length > 1 ? (
       <div className="rounded-[26px] bg-white p-6 shadow-[0_20px_70px_rgba(24,52,48,0.08)]">

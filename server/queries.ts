@@ -4,6 +4,8 @@ import { SignJWT, jwtVerify } from "jose";
 import { format } from "date-fns";
 import { getDb } from "./db";
 import { getMessagingProvider } from "./messaging";
+// mappers imports only types back from this module, so there is no runtime cycle.
+import { buildRiskFlags } from "./mappers";
 import {
   auditEvents,
   consentGrants,
@@ -26,6 +28,11 @@ import {
 } from "./_core/supabaseStorage";
 import type { TimelineEvent } from "@shared/demoData";
 
+// Capability links (verification, employee portal) are signed with a secret that
+// MUST be set in production — a known fallback would let anyone mint valid links.
+if (process.env.NODE_ENV === "production" && !process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET is required in production (signs employer-verification and employee-portal links)");
+}
 const TOKEN_SIGNING_SECRET = new TextEncoder().encode(
   process.env.JWT_SECRET || "skillio-dev-token-secret-change-me"
 );
@@ -33,7 +40,7 @@ export const NOTICE_VERSION = "v1.2";
 
 type DbClient = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 type TxClient = Parameters<Parameters<DbClient["transaction"]>[0]>[0];
-type DbOrTx = DbClient | TxClient;
+export type DbOrTx = DbClient | TxClient;
 
 export type OutcomeTypeValue = (typeof outcomeTypeEnum.enumValues)[number];
 export type OutcomeStatusValue = (typeof outcomeStatusEnum.enumValues)[number];
@@ -65,7 +72,7 @@ export class InputValidationError extends Error {
   }
 }
 
-async function requireDb(): Promise<DbClient> {
+export async function requireDb(): Promise<DbClient> {
   const db = await getDb();
   if (!db) throw new DatabaseNotConfiguredError();
   return db;
@@ -328,6 +335,13 @@ export async function getTraineeBySlug(slug: string) {
   const db = await requireDb();
   const [row] = await db.select().from(trainees).where(eq(trainees.slug, slug)).limit(1);
   if (!row) throw new NotFoundError("Trainee", slug);
+  return row;
+}
+
+export async function getTraineeByRef(traineeRef: string) {
+  const db = await requireDb();
+  const [row] = await db.select().from(trainees).where(eq(trainees.traineeRef, traineeRef)).limit(1);
+  if (!row) throw new NotFoundError("Trainee", traineeRef);
   return row;
 }
 
@@ -631,7 +645,7 @@ export async function listRecentMessageJobs(limit = 8) {
 // Writes
 // ---------------------------------------------------------------------------
 
-async function recordAudit(
+export async function recordAudit(
   handle: DbOrTx,
   entry: {
     actorType: string;
@@ -1307,7 +1321,7 @@ export async function createEmployeeLink(input: { traineeRef: string; ttlDays?: 
 }
 
 /** Verifies an employee portal token and returns the trainee ref it belongs to. */
-async function resolveEmployeeToken(token: string): Promise<string> {
+export async function resolveEmployeeToken(token: string): Promise<string> {
   try {
     const { payload } = await jwtVerify(token, TOKEN_SIGNING_SECRET);
     if (payload.purpose !== "employee_portal" || typeof payload.traineeRef !== "string") {
@@ -1408,7 +1422,7 @@ const DOCUMENT_MIME_ALLOWLIST = new Set([
 const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
 const NON_CERTIFICATE_RETENTION_MONTHS = 24;
 
-async function resolveEmployeeFromToken(token: string) {
+export async function resolveEmployeeFromToken(token: string) {
   const traineeRef = await resolveEmployeeToken(token);
   const db = await requireDb();
   const [row] = await db
@@ -1686,4 +1700,298 @@ export async function purgeExpiredEmployeeDocuments(now = new Date()) {
     });
   }
   return { purged: expired.length };
+}
+
+// ---------------------------------------------------------------------------
+// Signed capability links
+//
+// Two flavours share one primitive:
+//  - single-use (`consumeOneTimeToken`): employer verification, where replay
+//    must be impossible;
+//  - reusable (`assertReusableTokenLive`): trainee pulses and passport shares,
+//    where a page refresh must keep working but the link must stay revocable.
+// ---------------------------------------------------------------------------
+
+export const TRAINEE_PULSE_PURPOSE = "trainee_pulse";
+
+export async function signPurposeToken(input: {
+  purpose: string;
+  claims: Record<string, unknown>;
+  jti?: string;
+  ttlDays: number;
+}) {
+  const jti = input.jti ?? randomUUID();
+  const expiresAt = new Date(Date.now() + input.ttlDays * 86_400_000);
+  const token = await new SignJWT({ ...input.claims, purpose: input.purpose })
+    .setProtectedHeader({ alg: "HS256" })
+    .setJti(jti)
+    .setIssuedAt()
+    .setExpirationTime(Math.floor(expiresAt.getTime() / 1000))
+    .sign(TOKEN_SIGNING_SECRET);
+  return { token, jti, expiresAt };
+}
+
+export async function verifyPurposeToken(
+  token: string,
+  purpose: string
+): Promise<{ jti: string; payload: Record<string, unknown> }> {
+  try {
+    const { payload } = await jwtVerify(token, TOKEN_SIGNING_SECRET);
+    if (payload.purpose !== purpose || typeof payload.jti !== "string") {
+      throw new Error("wrong purpose or missing jti");
+    }
+    return { jti: payload.jti, payload: payload as Record<string, unknown> };
+  } catch {
+    throw new NotFoundError("Link", "invalid or expired");
+  }
+}
+
+/**
+ * Verifies a reusable link: signature must hold *and* its persisted jti row
+ * must still be live, which is what makes revocation immediate.
+ */
+export async function assertReusableTokenLive(token: string, purpose: string) {
+  const { jti, payload } = await verifyPurposeToken(token, purpose);
+  const db = await requireDb();
+  const [row] = await db
+    .select()
+    .from(oneTimeTokens)
+    .where(and(eq(oneTimeTokens.jti, jti), eq(oneTimeTokens.purpose, purpose)))
+    .limit(1);
+  if (!row || row.usedAt || row.expiresAt.getTime() < Date.now()) {
+    throw new NotFoundError("Link", "revoked or expired");
+  }
+  return { row, payload };
+}
+
+/** Revokes every live link of a purpose for a trainee (consent withdrawal path). */
+export async function revokePurposeTokens(traineeId: number, purpose: string) {
+  const db = await requireDb();
+  const revoked = await db
+    .update(oneTimeTokens)
+    .set({ usedAt: new Date() })
+    .where(
+      and(
+        eq(oneTimeTokens.traineeId, traineeId),
+        eq(oneTimeTokens.purpose, purpose),
+        isNull(oneTimeTokens.usedAt)
+      )
+    )
+    .returning({ id: oneTimeTokens.id });
+  return { revoked: revoked.length };
+}
+
+// ---------------------------------------------------------------------------
+// Trainee pulse links (the public mobile flow)
+// ---------------------------------------------------------------------------
+
+/** Issues a reusable pulse link so the mobile flow can be refreshed safely. */
+export async function createTraineePulseLink(input: { traineeRef: string; ttlDays?: number }) {
+  const db = await requireDb();
+  const trainee = await getTraineeByRef(input.traineeRef);
+  const ttlDays = input.ttlDays ?? 14;
+  const { token, jti, expiresAt } = await signPurposeToken({
+    purpose: TRAINEE_PULSE_PURPOSE,
+    claims: { traineeRef: trainee.traineeRef },
+    ttlDays,
+  });
+
+  await db.insert(oneTimeTokens).values({
+    jti,
+    purpose: TRAINEE_PULSE_PURPOSE,
+    traineeId: trainee.id,
+    expiresAt,
+  });
+  await recordAudit(db, {
+    actorType: "staff",
+    action: "pulse.link_created",
+    entityType: "trainee",
+    entityId: trainee.id,
+    purposeCode: "outcome_follow_up",
+    metadata: { traineeRef: trainee.traineeRef, expiresAt: expiresAt.toISOString() },
+  });
+
+  return { url: `/follow-up/mobile?t=${token}`, expiresAt };
+}
+
+/** Resolves a pulse link to its trainee. Never exposes other trainees. */
+export async function getTraineePulse(input: { token: string }) {
+  const { payload } = await assertReusableTokenLive(input.token, TRAINEE_PULSE_PURPOSE);
+  const traineeRef = typeof payload.traineeRef === "string" ? payload.traineeRef : "";
+  if (!traineeRef) throw new NotFoundError("Link", "missing trainee claim");
+  return getTraineeByRef(traineeRef);
+}
+
+/** Public pulse submission: the token is the authorisation, not a slug. */
+export async function submitTraineePulseResponse(input: {
+  token: string;
+  outcomeType: OutcomeTypeValue;
+  wageBand?: string | null;
+  relevance?: number | null;
+  consentToContact: boolean;
+}) {
+  const trainee = await getTraineePulse({ token: input.token });
+  return submitTraineeResponse({
+    slug: trainee.slug,
+    outcomeType: input.outcomeType,
+    wageBand: input.wageBand ?? null,
+    relevance: input.relevance ?? null,
+    consentToContact: input.consentToContact,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Counsellor escalation (the "assign to counsellor" action)
+// ---------------------------------------------------------------------------
+
+export async function escalateTrainee(input: {
+  traineeRef: string;
+  priority?: "P1" | "P2" | "P3" | "P4";
+  reason?: string;
+  assignedTo?: string | null;
+}) {
+  const db = await requireDb();
+  const trainee = await getTraineeByRef(input.traineeRef);
+
+  const [openCase] = await db
+    .select({ id: counsellorCases.id })
+    .from(counsellorCases)
+    .where(
+      and(
+        eq(counsellorCases.traineeId, trainee.id),
+        inArray(counsellorCases.status, ["open", "assigned"])
+      )
+    )
+    .limit(1);
+  if (openCase) return { caseId: openCase.id, created: false as const };
+
+  const priority = input.priority ?? "P2";
+  const [created] = await db
+    .insert(counsellorCases)
+    .values({
+      traineeId: trainee.id,
+      priority,
+      title: "Counsellor review requested",
+      reason: input.reason ?? "Escalated from the trainee journey by staff.",
+      nextAction: "Contact the trainee and confirm the next step",
+      channel: "whatsapp",
+      status: "assigned",
+      assignedTo: input.assignedTo ?? null,
+      dueAt: new Date(Date.now() + 86_400_000),
+    })
+    .returning({ id: counsellorCases.id });
+
+  await recordAudit(db, {
+    actorType: "staff",
+    action: "case.escalated",
+    entityType: "counsellorCase",
+    entityId: created.id,
+    purposeCode: "outcome_follow_up",
+    metadata: { traineeRef: trainee.traineeRef, priority },
+  });
+
+  return { caseId: created.id, created: true as const };
+}
+
+// ---------------------------------------------------------------------------
+// Explainable attrition-risk watchlist
+// ---------------------------------------------------------------------------
+
+/**
+ * Rule-based risk scoring over existing fields. Deliberately not a model: every
+ * flag names the fact that raised it, so a counsellor can disagree with it.
+ */
+export async function getRiskWatchlist() {
+  const db = await requireDb();
+  const [allTrainees, events, tasks] = await Promise.all([
+    db.select().from(trainees),
+    db
+      .select({
+        traineeId: outcomeEvents.traineeId,
+        wageBand: outcomeEvents.wageBand,
+        effectiveStartDate: outcomeEvents.effectiveStartDate,
+        supersedesEventId: outcomeEvents.supersedesEventId,
+      })
+      .from(outcomeEvents),
+    db
+      .select({ traineeId: followUpTasks.traineeId, status: followUpTasks.status, attemptNumber: followUpTasks.attemptNumber })
+      .from(followUpTasks),
+  ]);
+
+  const now = Date.now();
+  const eventsByTrainee = new Map<number, typeof events>();
+  for (const event of events) {
+    const list = eventsByTrainee.get(event.traineeId) ?? [];
+    list.push(event);
+    eventsByTrainee.set(event.traineeId, list);
+  }
+
+  const silentByTrainee = new Map<number, number>();
+  for (const task of tasks) {
+    if (task.status === "sent" || task.status === "failed") {
+      const current = silentByTrainee.get(task.traineeId) ?? 0;
+      silentByTrainee.set(task.traineeId, Math.max(current, task.attemptNumber));
+    }
+  }
+
+  return allTrainees
+    .map((trainee) => {
+      const chain = (eventsByTrainee.get(trainee.id) ?? []).sort(
+        (a, b) => (a.effectiveStartDate?.getTime() ?? 0) - (b.effectiveStartDate?.getTime() ?? 0)
+      );
+      const previousWage = chain.length > 1 ? wageBandMidpoint(chain[chain.length - 2].wageBand) : null;
+      const currentWage = wageBandMidpoint(trainee.wageBand);
+      const risk = buildRiskFlags({
+        outcomeType: trainee.outcomeType,
+        relevance: trainee.relevance,
+        retentionDays: trainee.retentionDays,
+        barrier: trainee.barrier,
+        daysSinceUpdate: Math.round((now - trainee.lastUpdated.getTime()) / 86_400_000),
+        unansweredReminders: silentByTrainee.get(trainee.id) ?? 0,
+        previousWageMidpoint: previousWage,
+        currentWageMidpoint: currentWage,
+      });
+      return { trainee, ...risk };
+    })
+    .filter((entry) => entry.flags.length > 0)
+    .sort((a, b) => b.score - a.score || a.trainee.displayName.localeCompare(b.trainee.displayName));
+}
+
+// ---------------------------------------------------------------------------
+// Public provider scorecards (aggregated from the trainee register)
+// ---------------------------------------------------------------------------
+
+export type ProviderScorecardRow = {
+  provider: string;
+  districts: string[];
+  completed: number;
+  verified: number;
+  retention: number;
+  relevance: number | null;
+};
+
+export async function listProviderScorecards(): Promise<ProviderScorecardRow[]> {
+  const db = await requireDb();
+  const rows = await db
+    .select({
+      provider: trainees.provider,
+      districts: sql<string[]>`array_agg(distinct ${trainees.district})`,
+      completed: sql<number>`count(*)::int`,
+      verified: sql<number>`count(*) filter (where ${trainees.outcomeStatus} = 'verified')::int`,
+      employed: sql<number>`count(*) filter (where ${trainees.outcomeType} in ('formal_employment','self_employment','apprenticeship'))::int`,
+      retained90: sql<number>`count(*) filter (where ${trainees.retentionDays} >= 90 and ${trainees.outcomeType} in ('formal_employment','self_employment','apprenticeship'))::int`,
+      relevance: sql<number | null>`avg(${trainees.relevance})`,
+    })
+    .from(trainees)
+    .groupBy(trainees.provider)
+    .orderBy(sql`count(*) desc`);
+
+  return rows.map((row) => ({
+    provider: row.provider,
+    districts: row.districts ?? [],
+    completed: row.completed,
+    verified: share(row.verified, row.employed),
+    retention: share(row.retained90, row.employed),
+    relevance: row.relevance === null ? null : Number(row.relevance),
+  }));
 }

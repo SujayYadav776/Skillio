@@ -2,6 +2,7 @@ import { and, eq, inArray, lte, or, sql } from "drizzle-orm";
 import { getDb } from "./db";
 import { getMessagingProvider } from "./messaging";
 import { purgeExpiredEmployeeDocuments } from "./queries";
+import { purgeExpiredPassportShares, refreshPublishedPassports } from "./passport";
 import {
   auditEvents,
   consentGrants,
@@ -346,6 +347,10 @@ async function runCycle() {
     await enforceSingleActiveOutcome();
     await purgeExpiredOneTimeTokens();
     await purgeExpiredEmployeeDocuments();
+    // Passports are snapshots: rebuild the published ones whose holder data
+    // changed, so a shared link never shows a stale career record.
+    await refreshPublishedPassports();
+    await purgeExpiredPassportShares();
     await auditCompletenessCheck();
   } catch (error) {
     console.error("[Scheduler] cycle failed:", error);
