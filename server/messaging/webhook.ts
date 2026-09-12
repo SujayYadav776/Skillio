@@ -65,9 +65,6 @@ export function registerWebhookRoutes(app: Express) {
       console.warn("[Webhook] accepting unsigned request in development — set WHATSAPP_APP_SECRET or WEBHOOK_VERIFY_TOKEN");
     }
 
-    // Respond fast; providers retry on non-2xx, and processing is idempotent.
-    res.sendStatus(200);
-
     try {
       const payload = JSON.parse(rawBody.toString("utf8")) as {
         entry?: Array<{
@@ -98,8 +95,13 @@ export function registerWebhookRoutes(app: Express) {
           }
         }
       }
+      // Process BEFORE acknowledging: on serverless runtimes the container is
+      // frozen once the response is sent, so fire-and-forget work would be
+      // silently lost. Failures return 500 and Meta retries (idempotent).
+      res.sendStatus(200);
     } catch (error) {
       console.error("[Webhook] processing failed:", error);
+      if (!res.headersSent) res.sendStatus(500);
     }
   });
 }

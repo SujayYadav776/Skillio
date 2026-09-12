@@ -1238,11 +1238,17 @@ export async function recordDeliveryStatus(input: {
  */
 export async function handleInboundMessage(input: { contactPhone: string }) {
   const db = await requireDb();
-  const [trainee] = await db
-    .select({ id: trainees.id, slug: trainees.slug, traineeRef: trainees.traineeRef })
-    .from(trainees)
-    .where(eq(trainees.contactPhone, input.contactPhone))
-    .limit(1);
+  // Meta sends `from` without the leading "+" (e.g. 917370969624) while the
+  // register stores E.164 with "+". Match on digits only so real replies
+  // resolve regardless of formatting.
+  const digits = input.contactPhone.replace(/\D/g, "");
+  const [trainee] = digits
+    ? await db
+        .select({ id: trainees.id, slug: trainees.slug, traineeRef: trainees.traineeRef })
+        .from(trainees)
+        .where(sql`regexp_replace("contactPhone", '[^0-9]', '', 'g') = ${digits}`)
+        .limit(1)
+    : [];
 
   if (!trainee) {
     await recordAudit(db, {
@@ -1250,7 +1256,7 @@ export async function handleInboundMessage(input: { contactPhone: string }) {
       action: "message.inbound_unknown_sender",
       entityType: "messageJob",
       purposeCode: "outcome_follow_up",
-      metadata: { contactHash: createHash("sha256").update(input.contactPhone).digest("hex").slice(0, 16) },
+      metadata: { contactHash: createHash("sha256").update(digits).digest("hex").slice(0, 16) },
     });
     return { matched: false as const };
   }
