@@ -56,18 +56,6 @@ export default function EmployeePortal() {
 function PortalHome({ token }: { token: string }) {
   const utils = trpc.useUtils();
   const portalQuery = trpc.employee.me.useQuery({ token }, { retry: false });
-
-  if (portalQuery.isLoading) {
-    return <div className="flex min-h-screen items-center justify-center bg-[#f1f6f4] px-5"><p className="text-sm text-slate-400">Opening your career page…</p></div>;
-  }
-  if (portalQuery.error || !portalQuery.data) {
-    return <PortalMessage
-      title="This link is no longer valid."
-      body="Employee links expire after 30 days. Ask your Skillio counsellor for a fresh one."
-    />;
-  }
-
-  const { profile, wageHistory, timeline } = portalQuery.data;
   const documentsQuery = trpc.employee.documents.list.useQuery({ token });
   const urlMutation = trpc.employee.documents.url.useMutation({
     onSuccess: (result) => window.open(result.url, "_blank"),
@@ -105,6 +93,18 @@ function PortalHome({ token }: { token: string }) {
   const [uploadKind, setUploadKind] = useState<"certificate" | "payslip" | "id_document" | "other">("certificate");
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+
+  // Guards live AFTER every hook so the hook order is identical on all renders.
+  if (portalQuery.isLoading) {
+    return <div className="flex min-h-screen items-center justify-center bg-[#f1f6f4] px-5"><p className="text-sm text-slate-400">Opening your career page…</p></div>;
+  }
+  if (portalQuery.error || !portalQuery.data) {
+    return <PortalMessage
+      title="This link is no longer valid."
+      body="Employee links expire after 30 days. Ask your Skillio counsellor for a fresh one."
+    />;
+  }
+  const { profile, wageHistory, timeline } = portalQuery.data;
 
   const upload = () => {
     if (!uploadFile || !uploadTitle.trim()) {

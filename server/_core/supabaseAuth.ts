@@ -65,8 +65,8 @@ export async function getSupabaseUser(req: Request): Promise<User | null> {
   if (!user) {
     await upsertUser({
       openId: claims.sub,
-      name: claims.name ?? null,
-      email: claims.email ?? null,
+      name: claims.name,
+      email: claims.email,
       loginMethod: "supabase",
       lastSignedIn: new Date(),
     });
@@ -74,8 +74,8 @@ export async function getSupabaseUser(req: Request): Promise<User | null> {
   } else {
     await upsertUser({
       openId: claims.sub,
-      name: claims.name ?? null,
-      email: claims.email ?? null,
+      name: claims.name,
+      email: claims.email,
       lastSignedIn: new Date(),
     });
   }
