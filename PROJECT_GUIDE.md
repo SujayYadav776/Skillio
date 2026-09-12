@@ -658,7 +658,10 @@ last in every entry).
 **Topology** (`vercel.json`): `framework:null`, `buildCommand:"pnpm build"`,
 `outputDirectory:"dist/public"`, rewrites: `/api/(.*) → /api` (the function) and
 `/((?!api/).*) → /index.html` (SPA fallback). Git integration: repo `SujayYadav776/Skillio`,
-production branch `main` → **every push auto-deploys**. Node 20.x runtime. Environment variables
+production branch `main` → **every push auto-deploys**. Node 24.x runtime (the
+Supabase storage client pulls in `realtime-js`, which needs the global `WebSocket`
+that Vercel's Node 20 runtime lacks — so the function runtime is pinned to 24.x).
+Environment variables
 (§19) live in Vercel's encrypted store; `VITE_*` are needed at *build* time because Vite inlines
 them into the client bundle.
 
@@ -793,8 +796,9 @@ Honest list (from code reading + `ROADMAP.md`/`RECOMMENDATION.md`):
   `contactPhone` is still stored plaintext; enabling it is a Theme-F item.
 - **`benefits.claims` (staff) doesn't apply district scoping** — unlike the other district-join
   reads; worth fixing before real multi-district staff.
-- **`EmployeePortal` declares some hooks after early returns** — a conditional-hooks smell that
-  works today but should be hoisted.
+- **Document "Open" uses `window.open()` inside an async callback** — the signed URL is
+  valid and verified (fetch returns the stored bytes), but popup blockers can suppress a
+  window opened after an await. A synchronous anchor or same-tab nav would be more robust.
 - **Decorative UI**: Cohorts export/"more filters", FollowUps "schedule campaign", header bell /
   help buttons, and MobileFollowUp's consent links have no handlers yet.
 - **Doc drift**: `README.md` + this guide are current (2026-09-12), but `TECH_STACK.md` still

@@ -90,7 +90,7 @@ role + district scoping — there is no raw REST surface.
 ## Quick start
 
 ```bash
-# prerequisites: Node 20+, corepack (pnpm 10.4.1), a Supabase project
+# prerequisites: Node 22+ (Supabase client needs global WebSocket), corepack (pnpm 10.4.1), a Supabase project
 git clone https://github.com/SujayYadav776/Skillio.git
 cd Skillio
 
@@ -129,7 +129,7 @@ ROADMAP.md       Build phases and decisions   ·   RECOMMENDATION.md — future 
 
 ## Deployment
 
-Pushes to `main` auto-deploy on Vercel (static SPA + one Node 20 serverless
+Pushes to `main` auto-deploy on Vercel (static SPA + one Node 24 serverless
 function; env vars live in Vercel's encrypted store). The scheduler is disabled
 in the serverless runtime — see [PROJECT_GUIDE.md §16](PROJECT_GUIDE.md#16-vercel-deployment-and-the-esm-bug-it-required-fixing)
 for the ESM bundling story behind `api/index.ts`.
